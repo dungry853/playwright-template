@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "playwright-test": {
+        "type": "local",
+        "command": ["cmd", "/c", "npx", "playwright", "run-test-mcp-server"]
+      }
+    }
+  }
+}

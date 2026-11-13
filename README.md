@@ -1,6 +1,8 @@
 # Playwright Test Project
 
-End-to-end test project built with [Playwright](https://playwright.dev/) and TypeScript, running inside Docker. It includes the **Playwright CLI** (`@playwright/cli`) and supports **Playwright Test Agents** (planner, generator, healer).
+End-to-end test project built with [Playwright](https://playwright.dev/) and TypeScript, running inside Docker. It includes the **Playwright CLI** (`@playwright/cli`), **Playwright Test Agents** (planner, generator, healer), and the agent skills for browser automation, security audit, and prose editing.
+
+Clone this repository for a new application, then set `BASE_URL` and align `pages/`, `tests/features/`, and `tests/e2e/` with the screens you test.
 
 ## Table of Contents
 
@@ -19,12 +21,12 @@ End-to-end test project built with [Playwright](https://playwright.dev/) and Typ
     - [npm scripts](#npm-scripts)
     - [Browsers](#browsers)
     - [Artifacts](#artifacts)
+    - [Screenshots for test reports](#screenshots-for-test-reports)
   - [Playwright CLI](#playwright-cli)
     - [`scripts/pw.cmd`](#scriptspwcmd)
   - [Playwright Agents](#playwright-agents)
-  - [Initialize AI Agents](#initialize-ai-agents)
-    - [1. Initialize Playwright Test Agents](#1-initialize-playwright-test-agents)
-    - [2. Install Playwright CLI Skills](#2-install-playwright-cli-skills)
+    - [Regenerating the agents after a Playwright upgrade](#regenerating-the-agents-after-a-playwright-upgrade)
+  - [Agent skills](#agent-skills)
   - [Writing Tests](#writing-tests)
     - [Conventions](#conventions)
   - [Reports \& Debugging](#reports--debugging)
@@ -55,13 +57,21 @@ playwright/
 │   ├── docker-compose.yml  # playwright (shell) and test (one-shot run) services
 │   └── entrypoint.sh       # Auto-installs dependencies when package-lock.json changes
 ├── fixtures/
-│   └── test.ts             # Custom fixtures (extends @playwright/test)
+│   ├── test.ts             # Custom fixtures (extends @playwright/test)
+│   └── screenshot.ts       # shot / shotOnFailure for report images
 ├── pages/                  # Page Object Model classes
 ├── scripts/
 │   └── pw.cmd              # Windows helper script
+├── specs/                  # Markdown test plans written by the planner agent
 ├── tests/
-│   └── example.spec.ts     # Test files (*.spec.ts)
+│   ├── auth.setup.ts       # Signs in once, saves .auth/user.json
+│   ├── features/           # One screen under test
+│   ├── e2e/                # Flows across several screens
+│   └── example.spec.ts     # Playwright demo, not part of any project
 ├── utils/                  # Shared helpers
+├── .agents/skills/         # playwright-cli, security-audit, humanizer
+├── .opencode/agents/       # planner, generator, healer subagents
+├── opencode.json           # MCP server registration
 ├── playwright-report/      # HTML report (generated, git-ignored)
 ├── test-results/           # Traces, screenshots, videos (generated, git-ignored)
 ├── .env                    # Local environment variables (not committed)
@@ -208,6 +218,8 @@ Defined in `.env` (copy from `.env.example`):
 | `PLAYWRIGHT_CLI_VERSION` | `latest` | Version of `@playwright/cli` installed in the image. Pin it for reproducible builds (`npm view @playwright/cli version`) |
 | `BASE_URL` | `http://host.docker.internal:8000` | URL of the application under test. **Required**: the config throws an error if it is missing |
 | `CI` | `false` | When `true`: 2 retries, 1 worker, and `test.only` is forbidden |
+| `SLOW_MO` | `0` | Milliseconds added to every action, so a headed run can be followed by eye. `0` disables it |
+| `APP_USER_EMAIL` / `APP_USER_PASSWORD` | *(empty)* | Account used by `tests/auth.setup.ts` to save `.auth/user.json`. Leave empty to skip the `setup` project |
 
 To reach an app running on your host machine from inside the container, use `host.docker.internal` instead of `localhost`. The compose file maps it via `extra_hosts`, so it also works on Linux. Make sure your app listens on `0.0.0.0`, not only `127.0.0.1`.
 
@@ -226,9 +238,16 @@ Targeted runs:
 ```bash
 npx playwright test tests/example.spec.ts          # one file
 npx playwright test -g "test title"                # by title
-npx playwright test --project=chromium             # one browser
-npx playwright test --project=firefox --project=webkit
+npx playwright test --project=chromium             # the main browser
+npx playwright test --repeat-each=3                # flake check
 npx playwright test --list                         # list without running
+```
+
+A headed run a human can watch, used when collecting report screenshots:
+
+```powershell
+$env:SLOW_MO='400'
+npx playwright test tests/features/<area>/<screen>.spec.ts --headed --workers=1
 ```
 
 One-shot runs from the host (no interactive shell), for example in CI:
@@ -247,14 +266,23 @@ dcp --profile test run --rm test npx playwright test --project=chromium
 | `npm run test:ui` | `playwright test --ui` | Open UI Mode* |
 | `npm run test:debug` | `playwright test --debug` | Debug with Playwright Inspector* |
 | `npm run test:report` | `playwright show-report` | Open the HTML report |
-| `npm run agents:init` | `playwright init-agents` | Initialize Playwright Agents |
+| `npm run test:flake` | `playwright test --repeat-each=3` | Repeat each test three times to catch flakiness |
+| `npm run agents:init` | `playwright init-agents` | Regenerate the Playwright Test Agents |
 | `npm run typecheck` | `tsc --noEmit` | Type-check only |
 
 \* Headed, UI, and debug modes need a display and do not work directly inside the container. Run them locally (Option B), or set up X11/VNC forwarding for the container.
 
 ### Browsers
 
-Configured in `playwright.config.ts`: **Chromium**, **Firefox**, and **WebKit** (desktop). Mobile and branded Edge/Chrome projects are included as comments; uncomment them to enable.
+Configured in `playwright.config.ts`: **Chromium** (`chromium`), plus a `setup` project that saves the signed-in session to `.auth/user.json`. Firefox and WebKit projects are present as comments; uncomment them when the app supports those engines.
+
+To make a spec run signed in, load the saved session on the project:
+
+```typescript
+{ name: "chromium", storageState: ".auth/user.json", dependencies: ["setup"] }
+```
+
+`tests/auth.setup.ts` skips itself when `APP_USER_EMAIL` / `APP_USER_PASSWORD` are empty, so specs that need no sign-in run without the setup project.
 
 ### Artifacts
 
@@ -265,6 +293,17 @@ Configured in `playwright.config.ts`: **Chromium**, **Firefox**, and **WebKit** 
 | Video | `retain-on-failure` |
 
 Output goes to `test-results/`; the HTML report goes to `playwright-report/`.
+
+### Screenshots for test reports
+
+Specs in `tests/features/` and `tests/e2e/` leave images a report can link to. Use the helpers in `fixtures/screenshot.ts` instead of calling `page.screenshot` directly:
+
+| File | When |
+| --- | --- |
+| `test-results/screenshots/{SCREEN_ID}/{SCREEN_ID}-{NN}-{case-slug}.png` | On the expected state, via `shot(page, SCREEN, name)` |
+| `test-results/screenshots/{SCREEN_ID}/{SCREEN_ID}-FAIL-{case-slug}.png` | On failure, via `shotOnFailure` in `test.afterEach` |
+
+`test-results/` is git-ignored. See `tests/AGENTS.md` for the full convention.
 
 ## Playwright CLI
 
@@ -290,82 +329,89 @@ Playwright Test Agents provide three roles:
 
 | Agent | Role |
 | --- | --- |
-| Planner | Explores the app and writes a Markdown test plan |
-| Generator | Turns the plan into Playwright test files |
+| Planner | Explores the app and writes a Markdown test plan to `specs/` |
+| Generator | Turns the plan into Playwright test files under `tests/` |
 | Healer | Runs tests and repairs failing ones |
 
+They are committed in this repository and need no setup:
 
-## Initialize AI Agents
+| File | Purpose |
+| --- | --- |
+| `.opencode/agents/playwright-test-{planner,generator,healer}.md` | Subagent definitions: description, mode, permissions, prompt |
+| `opencode.json` | Registers the `playwright-test` MCP server (`npx playwright run-test-mcp-server`) |
+| `.agents/skills/playwright-cli/` | Browser automation skill for the CLI, with references |
+| `specs/` | Where the planner saves test plans |
+| `tests/seed.spec.ts` | Seed test the planner and generator start from |
 
-### 1. Initialize Playwright Test Agents
+Ask for one of them by name, for example: "use the playwright-test-planner subagent to plan the settings screen".
 
-Generate agent definitions for your preferred AI coding tool.
-Supported AI tools:
-
-```bash
-npx playwright init-agents --loop=vscode
-npx playwright init-agents --loop=claude
-npx playwright init-agents --loop=opencode
-```
-
-Run the following command to see all available options:
+### Regenerating the agents after a Playwright upgrade
 
 ```bash
-npx playwright init-agents --help
+npm run agents:init
 ```
 
-### 2. Install Playwright CLI Skills
+`init-agents` writes an OpenCode configuration in the older V1 shape (`mcp.playwright-test`, `agent.*.prompt`, `.opencode/prompts/`). This repository uses the V2 shape (`mcp.servers`, agent files under `.opencode/agents/`). After regenerating, keep this repository's format:
 
-Install the official Playwright CLI skill for AI coding agents.
+1. Diff `opencode.json`; move any new server or tool settings under `mcp.servers`.
+2. Move prompt text into `.opencode/agents/*.md` and delete `.opencode/prompts/`.
+3. Keep the `permissions` blocks, so the planner stays read-only.
+
+## Agent skills
+
+Installed under `.agents/skills/`, discovered by OpenCode automatically:
+
+| Skill | Use it for |
+| --- | --- |
+| `playwright-cli` | Driving a browser from the command line: snapshots, locators, tracing, storage state |
+| `security-audit` | Trust-boundary review of the app or of this test suite |
+| `humanizer` | Rewriting AI-sounding prose in test plans, reports, and PR text |
+
+To refresh the official CLI skill after a Playwright upgrade:
 
 ```bash
 playwright-cli install --skills=agents
 ```
 
-The skill provides instructions for browser automation using Playwright CLI.
-
-**Notes:**
-- Run commands from the project root.
-- Commit generated agent definitions and skills to share them with your team.
-- Re-run `agents:init` after upgrading Playwright to refresh agent definitions.
-
 ## Writing Tests
 
 The project uses the **Page Object Model** and **custom fixtures**.
 
-`pages/login.page.ts`
+`pages/LoginPage.ts` (a placeholder in this template; align the locators with your app)
 
 ```typescript
-import { Page, Locator } from "@playwright/test";
+import { TestPage } from "@/pages/TestPage";
 
-export class LoginPage {
-  readonly username: Locator;
-  readonly password: Locator;
-  readonly submit: Locator;
-
-  constructor(private readonly page: Page) {
-    this.username = page.getByLabel("Username");
-    this.password = page.getByLabel("Password");
-    this.submit = page.getByRole("button", { name: "Sign in" });
+export class LoginPage extends TestPage {
+  async goto(): Promise<void> {
+    await super.goto("/login");
   }
 
-  async goto() {
-    await this.page.goto("/login");
+  get emailInput() {
+    return this.getByLabel(/e-?mail/i);
   }
 
-  async login(user: string, pass: string) {
-    await this.username.fill(user);
-    await this.password.fill(pass);
-    await this.submit.click();
+  get passwordInput() {
+    return this.getByLabel(/password/i);
+  }
+
+  get submitButton() {
+    return this.getByRole("button", { name: /sign in|log in/i });
+  }
+
+  async login(email: string, password: string): Promise<void> {
+    await this.emailInput.fill(email);
+    await this.passwordInput.fill(password);
+    await this.submitButton.click();
   }
 }
 ```
 
-`fixtures/test.ts`
+`fixtures/test.ts` (add fixtures here, then import `test` and `expect` from it)
 
 ```typescript
 import { test as base } from "@playwright/test";
-import { LoginPage } from "../pages/login.page";
+import { LoginPage } from "@/pages/LoginPage";
 
 export const test = base.extend<{ loginPage: LoginPage }>({
   loginPage: async ({ page }, use) => {
@@ -376,26 +422,29 @@ export const test = base.extend<{ loginPage: LoginPage }>({
 export { expect } from "@playwright/test";
 ```
 
-`tests/login.spec.ts`
+`tests/features/auth/login.spec.ts`
 
 ```typescript
-import { test, expect } from "../fixtures/test";
+import { test, expect } from "@/fixtures/test";
 
-test("user can sign in", async ({ loginPage, page }) => {
+test("01 - rejects a wrong password", async ({ loginPage, page }) => {
   await loginPage.goto();
-  await loginPage.login("demo", "secret");
-  await expect(page).toHaveURL(/dashboard/);
+  await loginPage.login("demo@example.test", "wrong-password");
+
+  await expect(page.getByRole("main")).toContainText(/invalid|incorrect/i);
 });
 ```
 
 ### Conventions
 
-- Put tests in `tests/` and name them `*.spec.ts`.
+- `tests/features/<area>/` for one screen, `tests/e2e/` for a flow across screens.
 - Put page objects in `pages/`, test data in `data/`, shared helpers in `utils/`.
+- Import with the `@/*` alias (`@/pages/LoginPage`, `@/fixtures/screenshot`).
 - Prefer user-facing locators: `getByRole`, `getByLabel`, `getByText`, `getByTestId`.
 - Use relative paths with `baseURL`: `page.goto("/login")`.
 - Never commit `test.only` (CI fails on it via `forbidOnly`).
 - Keep authentication state in `.auth/` (git-ignored), never in committed files.
+- Full rules for specs: `tests/AGENTS.md`.
 
 ## Reports & Debugging
 
@@ -481,4 +530,5 @@ playwright/.cache/
 - [Playwright Documentation](https://playwright.dev/docs/intro)
 - [Playwright with Docker](https://playwright.dev/docs/docker)
 - [Playwright Test Agents](https://playwright.dev/docs/test-agents)
+- [OpenCode MCP servers](https://opencode.ai/docs/mcp-servers)
 - [Page Object Models](https://playwright.dev/docs/pom)

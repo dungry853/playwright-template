@@ -17,11 +17,13 @@
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "test:debug": "playwright test --debug",
+    "test:flake": "playwright test --repeat-each=3",
     "test:report": "playwright show-report",
+    "agents:init": "playwright init-agents --loop=opencode",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "1.64.1",
     "@types/node": "^22.0.0",
     "dotenv": "^16.4.7",
     "typescript": "^5.8.0"
